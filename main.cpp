@@ -4,11 +4,10 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-typedef struct {
+struct InputBuffer {
     char *buffer;
     size_t buffer_length;
-    ssize_t input_length;
-} InputBuffer;
+};
 
 typedef enum {
     META_COMMAND_SUCCESS,
@@ -36,10 +35,10 @@ struct Row {
     char email[COLUMN_EMAIL_SIZE + 1];
 };
 
-typedef struct {
+struct Statement {
     StatementType type;
     Row row_to_insert;
-} Statement;
+};
 
 #define size_of_attribute(Struct, Attribute) sizeof(((Struct*)0)->Attribute)
 
@@ -55,7 +54,6 @@ InputBuffer *new_input_buffer() {
     auto *input_buffer = (InputBuffer *) malloc(sizeof(InputBuffer));
     input_buffer->buffer = nullptr;
     input_buffer->buffer_length = 0;
-    input_buffer->input_length = 0;
     return input_buffer;
 }
 
@@ -69,7 +67,6 @@ void read_input(InputBuffer *input_buffer) {
         printf("Error reading input\n");
         exit(EXIT_FAILURE);
     }
-    input_buffer->input_length = bytes_read - 1;
     input_buffer->buffer[bytes_read - 1] = 0;
 }
 
@@ -77,7 +74,6 @@ void close_input_buffer(InputBuffer *input_buffer) {
     free(input_buffer->buffer);
     free(input_buffer);
 }
-
 
 MetaCommandResult do_meta_command(InputBuffer *input_buffer) {
     if (strcmp(input_buffer->buffer, ".exit") == 0) {
@@ -125,7 +121,6 @@ PrepareResult prepare_statement(InputBuffer *input_buffer,
     return PREPARE_UNRECOGNIZED_STATEMENT;
 }
 
-
 void serialize_row(Row *source, void *destination) {
     char *dest = (char *) destination;
     memcpy(dest + ID_OFFSET, &(source->id), ID_SIZE);
@@ -156,6 +151,10 @@ struct Table {
     Pager *pager;
 };
 
+void print(Row *row) {
+    printf("(%d %s %s)\n", row->id, row->username, row->email);
+}
+
 void *get_page(Pager *pager, uint page_num) {
     if (page_num > TABLE_MAX_PAGES) {
         printf("Tried to fetch page number out of bounds. %d > %d\n", page_num,
@@ -183,42 +182,69 @@ void *get_page(Pager *pager, uint page_num) {
     return pager->pages[page_num];
 }
 
-void *row_slot(Table *table, uint row_num) {
-    // find page
-    uint page_num = row_num / ROWS_PER_PAGE;
-    auto page = get_page(table->pager, page_num);
-    // find offset in page
-    uint row_offset = row_num % ROWS_PER_PAGE;
-    uint byte_offset = row_offset * ROW_SIZE;
-    return (char *) page + byte_offset;
-}
-
 enum ExecuteResult {
     EXECUTE_SUCCESS,
     EXECUTE_TABLE_FULL,
     EXECUTE_FAIL,
 };
 
+struct Cursor {
+    Table *table;
+    uint row_num;
+    bool end_of_table;
+};
+
+Cursor *table_start(Table *table) {
+    auto *cursor = static_cast<Cursor *>(malloc(sizeof(Cursor)));
+    cursor->table = table;
+    cursor->row_num = 0;
+    cursor->end_of_table = (table->num_rows == 0);
+    return cursor;
+}
+
+Cursor *table_end(Table *table) {
+    auto *cursor = static_cast<Cursor *>(malloc(sizeof(Cursor)));
+    cursor->table = table;
+    cursor->row_num = table->num_rows;
+    cursor->end_of_table = true;
+    return cursor;
+}
+
+void *cursor_value(Cursor *cursor) {
+    uint row_num = cursor->row_num;
+    uint page_num = row_num / ROWS_PER_PAGE;
+    void *page = get_page(cursor->table->pager, page_num);
+    uint row_offset = row_num % ROWS_PER_PAGE;
+    uint byte_offset = row_offset * ROW_SIZE;
+    return (char *) page + byte_offset;
+}
+
+void cursor_advance(Cursor *cursor) {
+    cursor->row_num += 1;
+    if (cursor->row_num >= cursor->table->num_rows) {
+        cursor->end_of_table = true;
+    }
+}
+
 ExecuteResult execute_insert(Statement *statement, Table *table) {
     if (table->num_rows >= TABLE_MAX_ROWS) {
         return EXECUTE_TABLE_FULL;
     }
     Row *row_to_insert = &(statement->row_to_insert);
-    serialize_row(row_to_insert, row_slot(table, table->num_rows));
-    table->num_rows += 1;
+    auto cursor = table_end(table);
 
+    serialize_row(row_to_insert, cursor_value(cursor));
+    table->num_rows += 1;
     return EXECUTE_SUCCESS;
 }
 
-void print(Row *row) {
-    printf("(%d %s %s)\n", row->id, row->username, row->email);
-}
-
 ExecuteResult execute_select(Table *table) {
+    auto cursor = table_start(table);
     Row row{};
-    for (int i = 0; i < table->num_rows; ++i) {
-        deserialize_row(row_slot(table, i), &row);
+    while (!cursor->end_of_table) {
+        deserialize_row(cursor_value(cursor), &row);
         print(&row);
+        cursor_advance(cursor);
     }
     return EXECUTE_SUCCESS;
 }
@@ -349,7 +375,7 @@ int main(int argc, const char *argv[]) {
                     continue;
             }
         }
-        Statement statement;
+        Statement statement{};
         switch (prepare_statement(input_buffer, &statement)) {
             case PREPARE_SUCCESS:
                 break;
