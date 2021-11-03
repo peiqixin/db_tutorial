@@ -412,17 +412,6 @@ void set_node_type(void *node, NodeType type) {
     *((uint *) ((char *) node + NODE_TYPE_OFFSET)) = value;
 }
 
-Cursor *table_find(Table *table, uint key) {
-    uint root_page_num = table->root_page_num;
-    void *root_node = get_page(table->pager, root_page_num);
-
-    if (get_node_type(root_node) == NODE_LEAF) {
-        return leaf_node_find(table, root_page_num, key);
-    } else {
-        printf("Need to implement searching an internal node\n");
-        exit(EXIT_FAILURE);
-    }
-}
 
 /**
  * Internal Node Header Layout
@@ -582,35 +571,6 @@ void leaf_node_insert(Cursor *cursor, uint key, Row *value) {
     serialize_row(value, leaf_node_value(node, cursor->cell_num));
 }
 
-ExecuteResult execute_insert(Statement *statement, Table *table) {
-    void *node = get_page(table->pager, table->root_page_num);
-    uint num_cells = *leaf_node_num_cells(node);
-
-    Row *row_to_insert = &(statement->row_to_insert);
-    uint key_to_insert = row_to_insert->id;
-    Cursor *cursor = table_find(table, key_to_insert);
-
-    if (cursor->cell_num < num_cells) {
-        uint key_at_index = *leaf_node_key(node, cursor->cell_num);
-        if (key_at_index == key_to_insert) {
-            return EXECUTE_DUPLICATE_KEY;
-        }
-    }
-
-    leaf_node_insert(cursor, row_to_insert->id, row_to_insert);
-    return EXECUTE_SUCCESS;
-}
-
-ExecuteResult execute_statement(Statement *statement, Table *table) {
-    switch (statement->type) {
-        case (STATEMENT_INSERT):
-            return execute_insert(statement, table);
-        case (STATEMENT_SELECT):
-            return execute_select(table);
-    }
-    return EXECUTE_FAIL;
-}
-
 void indent(uint level) {
     for (uint i = 0; i < level; ++i) printf("  ");
 }
@@ -677,6 +637,75 @@ MetaCommandResult do_meta_command(InputBuffer *input_buffer, Table *table) {
     } else {
         return META_COMMAND_UNRECOGNIZED_COMMAND;
     }
+}
+
+Cursor *internal_node_find(Table *table, uint page_num, uint key) {
+    void *node = get_page(table->pager, page_num);
+    uint num_keys = *internal_node_num_keys(node);
+    uint min_index = 0;
+    uint max_index = num_keys;
+
+    while (min_index != max_index) {
+        uint index = (min_index + max_index) / 2;
+        uint key_to_right = *internal_node_key(node, index);
+        if (key_to_right >= key) {
+            max_index = index;
+        } else {
+            min_index = index + 1;
+        }
+    }
+
+    uint child_num = *internal_node_child(node, min_index);
+    void *child = get_page(table->pager, child_num);
+    switch (get_node_type(child)) {
+        case NODE_LEAF:
+            return leaf_node_find(table, child_num, key);
+        case NODE_INTERNAL:
+            return internal_node_find(table, child_num, key);
+        default:
+            printf("Unknown node type\n");
+            exit(EXIT_FAILURE);
+    }
+}
+
+Cursor *table_find(Table *table, uint key) {
+    uint root_page_num = table->root_page_num;
+    void *root_node = get_page(table->pager, root_page_num);
+
+    if (get_node_type(root_node) == NODE_LEAF) {
+        return leaf_node_find(table, root_page_num, key);
+    } else {
+        return internal_node_find(table, root_page_num, key);
+    }
+}
+
+ExecuteResult execute_insert(Statement *statement, Table *table) {
+    void *node = get_page(table->pager, table->root_page_num);
+    uint num_cells = *leaf_node_num_cells(node);
+
+    Row *row_to_insert = &(statement->row_to_insert);
+    uint key_to_insert = row_to_insert->id;
+    Cursor *cursor = table_find(table, key_to_insert);
+
+    if (cursor->cell_num < num_cells) {
+        uint key_at_index = *leaf_node_key(node, cursor->cell_num);
+        if (key_at_index == key_to_insert) {
+            return EXECUTE_DUPLICATE_KEY;
+        }
+    }
+
+    leaf_node_insert(cursor, row_to_insert->id, row_to_insert);
+    return EXECUTE_SUCCESS;
+}
+
+ExecuteResult execute_statement(Statement *statement, Table *table) {
+    switch (statement->type) {
+        case (STATEMENT_INSERT):
+            return execute_insert(statement, table);
+        case (STATEMENT_SELECT):
+            return execute_select(table);
+    }
+    return EXECUTE_FAIL;
 }
 
 int main(int argc, const char *argv[]) {
