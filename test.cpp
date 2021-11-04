@@ -12,7 +12,7 @@ int main(int argc, const char *argv[]) {
     const char *filename = argv[1];
     Table *table = db_open(filename);
     Statement statement{};
-    for (int i = 0; i < 15; ++i) {
+    for (int i = 0; i < 30; ++i) {
         statement.row_to_insert.id = i + 1;
         sprintf(statement.row_to_insert.username, "user%d", i + 1);
         sprintf(statement.row_to_insert.email, "user%d@email.com", i + 1);
