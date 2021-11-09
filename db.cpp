@@ -427,6 +427,9 @@ void create_new_root(Table *table, uint right_child_page_num) {
 
 
 void leaf_node_split_and_insert(Cursor *cursor, uint key, Row *value) {
+    /**
+     * 创建新的页面，将后一半的内容拷贝到新分配的页面
+     */
     void *old_node = get_page(cursor->table->pager, cursor->page_num);
     uint old_max = get_node_max_key(old_node);
     uint new_page_num = get_unused_page_num(cursor->table->pager);
@@ -455,6 +458,7 @@ void leaf_node_split_and_insert(Cursor *cursor, uint key, Row *value) {
         }
     }
 
+    // 更新结点数量
     *(leaf_node_num_cells(old_node)) = LEAF_NODE_LEFT_SPLIT_COUNT;
     *(leaf_node_num_cells(new_node)) = LEAF_NODE_RIGHT_SPLIT_COUNT;
 
@@ -465,6 +469,7 @@ void leaf_node_split_and_insert(Cursor *cursor, uint key, Row *value) {
         uint new_max = get_node_max_key(old_node);
         void *parent = get_page(cursor->table->pager, parent_page_num);
 
+        // old_max 更新为 new_max
         update_internal_node_key(parent, old_max, new_max);
         internal_node_insert(cursor->table, parent_page_num, new_page_num);
     }
@@ -655,6 +660,7 @@ uint internal_node_find_child(void *node, uint key) {
     uint min_index = 0;
     uint max_index = num_keys;
 
+    // lower_bound
     while (min_index != max_index) {
         uint index = (min_index + max_index) / 2;
         uint key_to_right = *internal_node_key(node, index);
@@ -683,11 +689,14 @@ void internal_node_insert(Table *table, uint parent_page_num, uint child_page_nu
 
     uint right_child_page_num = *internal_node_right_child(parent);
     void *right_child = get_page(table->pager, right_child_page_num);
+
     if (child_max_key > get_node_max_key(right_child)) {
+        // 当前页面已经是key最大的页面
         *internal_node_child(parent, original_num_keys) = right_child_page_num;
         *internal_node_key(parent, original_num_keys) = get_node_max_key(right_child);
         *internal_node_right_child(parent) = child_page_num;
     } else {
+        // key 从后向前拷贝
         for (uint i = original_num_keys; i > index; i--) {
             void *destination = internal_node_child(parent, i);
             void *source = internal_node_cell(parent, i - 1);
